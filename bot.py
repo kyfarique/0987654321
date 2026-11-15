@@ -18,6 +18,7 @@ import sqlite3
 import datetime
 import asyncio
 import contextlib
+import re
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command, CommandObject
@@ -52,6 +53,7 @@ log = logging.getLogger("partner_bot")
 class PartnerStates(StatesGroup):
     waiting_payout = State()
     waiting_creative_submission = State()
+    waiting_support_msg = State()
 
 # ============================================================
 # БАЗА ДАННЫХ
@@ -90,7 +92,7 @@ def init_db():
                 text TEXT
             )
         """)
-        # Миграция для добавления referrer_id
+        # Миграция для добавления referrer_id, если база старая
         try: conn.execute("ALTER TABLE partners ADD COLUMN referrer_id INTEGER")
         except sqlite3.OperationalError: pass
         
@@ -180,7 +182,7 @@ async def cmd_start(message: types.Message, command: CommandObject):
         ref_id = None
         if ref and ref.startswith("ref_") and ref[4:].isdigit():
             ref_id = int(ref[4:])
-            if ref_id == uid: ref_id = None # Защита от самоприглашения
+            if ref_id == uid: ref_id = None 
 
         if is_new:
             conn.execute("INSERT INTO partners (tg_id, username, referrer_id, added_at) VALUES (?, ?, ?, ?)", 
@@ -284,7 +286,6 @@ async def process_support_msg(message: types.Message, state: FSMContext):
     except Exception:
         await message.answer("❌ Ошибка отправки. Попробуйте позже.")
 
-import re
 @dp.message(F.from_user.id == int(ADMIN_ID), F.reply_to_message)
 async def admin_reply_handler(message: types.Message):
     reply_text = message.reply_to_message.text
@@ -406,18 +407,40 @@ async def process_payout(message: types.Message, state: FSMContext):
     except Exception: pass
 
 # ============================================================
-# АДМИН ПАНЕЛЬ
+# АДМИН ПАНЕЛЬ (ЗАЩИЩЕНА ОТ ОБРЫВА)
 # ============================================================
 @dp.message(F.text == "📈 Список партнеров")
 async def cmd_stats(message: types.Message):
     if str(message.from_user.id) != str(ADMIN_ID): return
+    
     with get_db() as conn:
         partners = conn.execute("SELECT tg_id, username, referrer_id FROM partners").fetchall()
-    text = f"📈 <b>Всего траферов: {len(partners)}</b>\n\n"
+        
+    if not partners:
+        await message.answer("Партнеров пока нет.")
+        return
+
+    header = f"📈 <b>Всего траферов: {len(partners)}</b>\n\n"
+    text = header
+    
     for p in partners:
         ref_info = f" (Пригласил: {p[2]})" if p[2] else ""
         text += f"👤 <code>{p[0]}</code> | @{p[1]}{ref_info}\n"
-    await message.answer(text)
+        
+        # Если сообщение становится слишком длинным (близко к лимиту 4096)
+        if len(text) > 3500:
+            try:
+                await message.answer(text)
+                await asyncio.sleep(0.5) 
+            except Exception as e:
+                log.error(f"Ошибка отправки списка: {e}")
+            text = "" 
+
+    if text.strip():
+        try:
+            await message.answer(text)
+        except Exception as e:
+            log.error(f"Ошибка отправки остатка списка: {e}")
 
 # ============================================================
 # ЗАПУСК
