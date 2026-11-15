@@ -3,7 +3,7 @@ import subprocess
 import os
 
 # ============================================================
-# АВТОУСТАНОВКА AIOGRAM (Если Bothost не видит requirements.txt)
+# АВТОУСТАНОВКА AIOGRAM
 # ============================================================
 try:
     import aiogram
@@ -62,7 +62,7 @@ class PartnerStates(StatesGroup):
     waiting_support_msg = State()
 
 # ============================================================
-# БАЗА ДАННЫХ И МЕГА-БАЗА КРЕАТИВОВ
+# БАЗА ДАННЫХ
 # ============================================================
 @contextlib.contextmanager
 def get_db():
@@ -168,18 +168,20 @@ async def cmd_start(message: types.Message):
     uid = message.from_user.id
     uname = message.from_user.username or "no_username"
     
+    # Если зашел админ
     if str(uid) == str(ADMIN_ID):
         await message.answer("👑 <b>Привет, Админ!</b>\nТы в панели управления.", reply_markup=get_admin_kb())
         return
 
+    # Если зашел трафер
     with get_db() as conn:
-        # Проверяем, новый ли это трафер
+        # Проверяем, новый ли он
         is_new = conn.execute("SELECT 1 FROM partners WHERE tg_id = ?", (uid,)).fetchone() is None
         if is_new:
             conn.execute("INSERT INTO partners (tg_id, username, added_at) VALUES (?, ?, ?)", 
                          (uid, uname, datetime.datetime.now().isoformat()))
             
-            # УВЕДОМЛЕНИЕ АДМИНУ О НОВОМ ТРАФЕРЕ
+            # Отправляем уведомление админу
             try:
                 await bot.send_message(ADMIN_ID, f"🆕 <b>НОВЫЙ ТРАФЕР ЗАШЕЛ!</b>\n\n👤 Имя: {message.from_user.first_name}\n🔗 Юзернейм: @{uname}\n🆔 ID: <code>{uid}</code>")
             except Exception: pass
@@ -187,22 +189,27 @@ async def cmd_start(message: types.Message):
     await message.answer(
         "🚀 <b>Добро пожаловать в Партнерскую команду!</b>\n\n"
         "Здесь ты можешь взять ссылки, получить сценарии и забрать кэш.\n\n"
-        "💰 <b>УСЛОВИЯ ОПЛАТЫ (Адекватный Оффер):</b>\n"
-        "• <b>$15</b> за каждого игрока, который сделал депозит (FTD).\n"
+        "💰 <b>УСЛОВИЯ ОПЛАТЫ:</b>\n"
+        "• <b>$15</b> за каждого игрока с депозитом (FTD).\n"
         "• <b>50% RevShare</b> от проигрышей привлеченных игроков.\n\n"
         "🎁 <b>БОНУСЫ ЗА ТРАФИК:</b>\n"
-        "• 50.000 просмотров с нашей ссылкой? <b>+$10</b>\n"
+        "• 50.000 просмотров? <b>+$10</b>\n"
         "• 100.000 просмотров? <b>+$30</b>\n"
         "• Предложил крутой креатив? <b>+$10!</b>\n\n"
         "👇 Используй кнопки внизу:",
         reply_markup=get_partner_kb()
     )
 
+@dp.message(Command("test"))
+async def cmd_test_notify(message: types.Message):
+    if str(message.from_user.id) != str(ADMIN_ID): return
+    await message.answer("✅ Бот работает, уведомления включены!")
+
 @dp.message(F.text == "🔗 Мои ссылки")
 async def partner_links(message: types.Message):
     uid = message.from_user.id
     text = (
-        f"🔗 <b>Твои личные ссылки (выбирай любую):</b>\n\n"
+        f"🔗 <b>Твои личные ссылки:</b>\n\n"
         f"💣 <b>1. Mines:</b>\n<code>{LINK_MINES}?start=tr_{uid}</code>\n\n"
         f"✈️ <b>2. Aviator:</b>\n<code>{LINK_AVIATOR}?start=tr_{uid}</code>\n\n"
         f"🎰 <b>3. Slots:</b>\n<code>{LINK_SLOTS}?start=tr_{uid}</code>\n\n"
@@ -213,10 +220,10 @@ async def partner_links(message: types.Message):
 
 @dp.message(F.text == "📊 Моя статистика")
 async def partner_stats(message: types.Message):
-    await message.answer("📊 <b>Твоя статистика:</b>\n\n👆 Переходы: <i>считаются</i>\n✅ Регистрации: <i>считаются</i>\n💰 Текущий баланс: <i>запроси у админа</i>\n\n<i>(Автоматическая статистика обновляется раз в сутки)</i>")
+    await message.answer("📊 <b>Твоя статистика:</b>\n\n👆 Переходы: <i>считаются</i>\n✅ Регистрации: <i>считаются</i>\n💰 Текущий баланс: <i>запроси у админа</i>")
 
 # ============================================================
-# ОБРАТНАЯ СВЯЗЬ (ТРАФЕР ПИШЕТ АДМИНУ)
+# ОБРАТНАЯ СВЯЗЬ
 # ============================================================
 @dp.message(F.text == "📩 Связаться с админом")
 async def support_msg(message: types.Message, state: FSMContext):
@@ -229,28 +236,46 @@ async def process_support_msg(message: types.Message, state: FSMContext):
     uid = message.from_user.id
     uname = message.from_user.username or "no_username"
     
-    # Отправляем админу
     try:
-        await bot.send_message(ADMIN_ID, f"📩 <b>СООБЩЕНИЕ ОТ ТРАФЕРА</b>\n👤 От: <code>{uid}</code> | @{uname}\n\n{message.text}")
+        # Отправляем сообщение админу. ВАЖНО: добавляем ID трафера в сообщение!
+        await bot.send_message(
+            ADMIN_ID, 
+            f"📩 <b>СООБЩЕНИЕ ОТ ТРАФЕРА</b>\n"
+            f"👤 От: <code>{uid}</code> | @{uname}\n\n"
+            f"{message.text}\n\n"
+            f"<i>(Чтобы ответить, зажми это сообщение и нажми «Ответить»)</i>"
+        )
         await message.answer("✅ Сообщение отправлено! Админ ответит вам в ближайшее время.")
     except Exception:
         await message.answer("❌ Ошибка отправки. Попробуйте позже.")
 
-# АДМИН ОТВЕЧАЕТ ТРАФЕРУ (через Reply)
-@dp.message(F.from_user.id == int(ADMIN_ID))
+# ОТВЕТ АДМИНА (Ловим любой ответ админа)
+@dp.message(F.from_user.id == int(ADMIN_ID), F.reply_to_message)
 async def admin_reply_handler(message: types.Message):
-    # Проверяем, является ли это ответом (Reply) на сообщение от трафера
-    if message.reply_to_message and "СООБЩЕНИЕ ОТ ТРАФЕРА" in message.reply_to_message.text:
-        # Ищем ID трафера в тексте
-        match = re.search(r'От: (\d+)', message.reply_to_message.text)
+    # Проверяем, что админ ответил на сообщение от трафера
+    reply_text = message.reply_to_message.text
+    
+    if reply_text and "СООБЩЕНИЕ ОТ ТРАФЕРА" in reply_text:
+        # Ищем ID трафера в тексте сообщения (ищем цифры после слова "От: ")
+        match = re.search(r'От:\s*(\d+)', reply_text)
+        
         if match:
             traf_id = int(match.group(1))
             try:
+                # Отправляем ответ траферу
                 await bot.send_message(traf_id, f"👑 <b>Ответ от Админа:</b>\n\n{message.text}")
-                await message.answer(f"✅ Ответ отправлен траферу <code>{traf_id}</code>")
+                await message.answer(f"✅ Ответ успешно отправлен траферу <code>{traf_id}</code>!")
             except Exception as e:
-                await message.answer(f"❌ Не удалось отправить: {e}")
-            return
+                await message.answer(f"❌ Не удалось отправить сообщение. Ошибка: {e}")
+        else:
+            await message.answer("❌ Не смог найти ID трафера в сообщении.")
+            
+    elif reply_text and "НОВЫЙ КРЕАТИВ" in reply_text:
+         match = re.search(r'От:\s*(\d+)', reply_text)
+         if match:
+            traf_id = int(match.group(1))
+            await bot.send_message(traf_id, f"👑 <b>Ответ от Админа по креативу:</b>\n\n{message.text}")
+            await message.answer(f"✅ Ответ отправлен траферу <code>{traf_id}</code>!")
 
 # ============================================================
 # ОТПРАВКА СВОЕГО КРЕАТИВА
@@ -272,7 +297,10 @@ async def process_creative_submission(message: types.Message, state: FSMContext)
     uname = message.from_user.username or "no_username"
     
     try:
-        await bot.send_message(ADMIN_ID, f"📥 <b>НОВЫЙ КРЕАТИВ ОТ ТРАФЕРА!</b>\n👤 От: <code>{uid}</code> | @{uname}\n\n👇 Смотри ниже:")
+        await bot.send_message(
+            ADMIN_ID, 
+            f"📥 <b>НОВЫЙ КРЕАТИВ ОТ ТРАФЕРА!</b>\n👤 От: <code>{uid}</code> | @{uname}\n\n👇 Смотри ниже:"
+        )
         await message.copy_to(chat_id=ADMIN_ID)
         await message.answer("✅ <b>Креатив отправлен на проверку!</b> Если админ одобрит, ты получишь <b>$10</b>.")
     except Exception:
