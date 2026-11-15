@@ -1,6 +1,25 @@
+import sys
+import subprocess
+import os
+
+# ============================================================
+# АВТОУСТАНОВКА AIOGRAM (Если Bothost не видит requirements.txt)
+# ============================================================
+try:
+    import aiogram
+except ImportError:
+    print("Библиотека aiogram не найдена. Начинаю установку...")
+    try:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "aiogram"])
+        print("Установка aiogram успешно завершена! Перезапуск...")
+        os.execv(sys.executable, ['python'] + sys.argv)
+    except Exception as e:
+        print(f"ОШИБКА УСТАНОВКИ: {e}")
+        sys.exit(1)
+# ============================================================
+
 # -*- coding: utf-8 -*-
 import logging
-import os
 import sqlite3
 import datetime
 import asyncio
