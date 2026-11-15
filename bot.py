@@ -8,15 +8,9 @@ import os
 try:
     import aiogram
 except ImportError:
-    print("Библиотека aiogram не найдена. Начинаю установку...")
-    try:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "aiogram"])
-        print("Установка aiogram успешно завершена! Перезапуск...")
-        os.execv(sys.executable, ['python'] + sys.argv)
-    except Exception as e:
-        print(f"ОШИБКА УСТАНОВКИ: {e}")
-        sys.exit(1)
-# ============================================================
+    print("Установка aiogram...")
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "aiogram"])
+    os.execv(sys.executable, ['python'] + sys.argv)
 
 # -*- coding: utf-8 -*-
 import logging
@@ -24,10 +18,9 @@ import sqlite3
 import datetime
 import asyncio
 import contextlib
-import re
 
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command
+from aiogram.filters import Command, CommandObject
 from aiogram.types import (
     ReplyKeyboardMarkup, KeyboardButton, MenuButtonCommands,
     InlineKeyboardMarkup, InlineKeyboardButton
@@ -38,12 +31,12 @@ from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.storage.memory import MemoryStorage
 
 # ============================================================
-# НАСТРОЙКИ МЕГА-БОТА (@aipredictor_signals)
+# НАСТРОЙКИ ПАРТНЕРСКОГО БОТА (@aipredictor_signals)
 # ============================================================
 PARTNER_BOT_TOKEN = "9059976355:AAHcflcwyNShhrnVB5CcPI6nRx1IcV4xu9U"
 ADMIN_ID = "6109042131" 
 
-# Твои ссылки
+# Твои ссылки на игровые боты
 LINK_MINES = "https://t.me/MINESSIGNALSONEWINBOT"
 LINK_AVIATOR = "https://t.me/aviatora1winibot"
 LINK_SLOTS = "https://t.me/slotaipredictorbot"
@@ -59,7 +52,6 @@ log = logging.getLogger("partner_bot")
 class PartnerStates(StatesGroup):
     waiting_payout = State()
     waiting_creative_submission = State()
-    waiting_support_msg = State()
 
 # ============================================================
 # БАЗА ДАННЫХ
@@ -84,10 +76,10 @@ def init_db():
                 tg_id INTEGER PRIMARY KEY,
                 username TEXT,
                 balance REAL DEFAULT 0,
+                referrer_id INTEGER,
                 added_at TEXT
             )
         """)
-        conn.execute("DROP TABLE IF EXISTS creatives") 
         conn.execute("""
             CREATE TABLE IF NOT EXISTS creatives (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -98,7 +90,14 @@ def init_db():
                 text TEXT
             )
         """)
-        load_default_creatives(conn)
+        # Миграция для добавления referrer_id
+        try: conn.execute("ALTER TABLE partners ADD COLUMN referrer_id INTEGER")
+        except sqlite3.OperationalError: pass
+        
+        # Загружаем креативы, если их нет
+        count = conn.execute("SELECT COUNT(*) FROM creatives").fetchone()[0]
+        if count == 0:
+            load_default_creatives(conn)
 
 def load_default_creatives(conn):
     c = []
@@ -143,9 +142,10 @@ dp = Dispatcher(storage=MemoryStorage())
 def get_partner_kb():
     kb = ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="🔗 Мои ссылки"), KeyboardButton(text="📊 Моя статистика")],
+            [KeyboardButton(text="🔗 Мои ссылки для трафика"), KeyboardButton(text="📊 Моя статистика")],
             [KeyboardButton(text="🎬 База креативов"), KeyboardButton(text="📤 Предложить креатив")],
-            [KeyboardButton(text="📩 Связаться с админом"), KeyboardButton(text="💰 Вывести деньги")]
+            [KeyboardButton(text="👥 Пригласить трафера (5%)"), KeyboardButton(text="📩 Связаться с админом")],
+            [KeyboardButton(text="💰 Вывести деньги")]
         ],
         resize_keyboard=True
     )
@@ -164,26 +164,35 @@ def get_admin_kb():
 # ХЕНДЛЕРЫ
 # ============================================================
 @dp.message(Command("start"))
-async def cmd_start(message: types.Message):
+async def cmd_start(message: types.Message, command: CommandObject):
     uid = message.from_user.id
     uname = message.from_user.username or "no_username"
+    ref = command.args
     
-    # Если зашел админ
     if str(uid) == str(ADMIN_ID):
         await message.answer("👑 <b>Привет, Админ!</b>\nТы в панели управления.", reply_markup=get_admin_kb())
         return
 
-    # Если зашел трафер
     with get_db() as conn:
-        # Проверяем, новый ли он
         is_new = conn.execute("SELECT 1 FROM partners WHERE tg_id = ?", (uid,)).fetchone() is None
+        
+        # Логика приглашения трафера (5%)
+        ref_id = None
+        if ref and ref.startswith("ref_") and ref[4:].isdigit():
+            ref_id = int(ref[4:])
+            if ref_id == uid: ref_id = None # Защита от самоприглашения
+
         if is_new:
-            conn.execute("INSERT INTO partners (tg_id, username, added_at) VALUES (?, ?, ?)", 
-                         (uid, uname, datetime.datetime.now().isoformat()))
+            conn.execute("INSERT INTO partners (tg_id, username, referrer_id, added_at) VALUES (?, ?, ?, ?)", 
+                         (uid, uname, ref_id, datetime.datetime.now().isoformat()))
             
-            # Отправляем уведомление админу
+            # Уведомление админу
             try:
                 await bot.send_message(ADMIN_ID, f"🆕 <b>НОВЫЙ ТРАФЕР ЗАШЕЛ!</b>\n\n👤 Имя: {message.from_user.first_name}\n🔗 Юзернейм: @{uname}\n🆔 ID: <code>{uid}</code>")
+                
+                # Если пришел по рефке, уведомляем пригласившего
+                if ref_id:
+                    await bot.send_message(ref_id, f"🎉 <b>По твоей ссылке зашел новый трафер!</b>\n\nТеперь ты будешь получать <b>5%</b> от его заработка. Так держать!")
             except Exception: pass
 
     await message.answer(
@@ -196,31 +205,58 @@ async def cmd_start(message: types.Message):
         "• 50.000 просмотров? <b>+$10</b>\n"
         "• 100.000 просмотров? <b>+$30</b>\n"
         "• Предложил крутой креатив? <b>+$10!</b>\n\n"
+        "👥 <b>ПАРТНЕРСКАЯ СЕТЬ:</b>\n"
+        "Приглашай других траферов по своей ссылке и получай <b>5% от их заработка</b>!\n\n"
         "👇 Используй кнопки внизу:",
         reply_markup=get_partner_kb()
     )
 
-@dp.message(Command("test"))
-async def cmd_test_notify(message: types.Message):
-    if str(message.from_user.id) != str(ADMIN_ID): return
-    await message.answer("✅ Бот работает, уведомления включены!")
-
-@dp.message(F.text == "🔗 Мои ссылки")
+@dp.message(F.text == "🔗 Мои ссылки для трафика")
 async def partner_links(message: types.Message):
     uid = message.from_user.id
     text = (
-        f"🔗 <b>Твои личные ссылки:</b>\n\n"
+        f"🔗 <b>Твои личные ссылки (выбирай любую):</b>\n\n"
         f"💣 <b>1. Mines:</b>\n<code>{LINK_MINES}?start=tr_{uid}</code>\n\n"
         f"✈️ <b>2. Aviator:</b>\n<code>{LINK_AVIATOR}?start=tr_{uid}</code>\n\n"
         f"🎰 <b>3. Slots:</b>\n<code>{LINK_SLOTS}?start=tr_{uid}</code>\n\n"
         f"📊 <b>4. AI Signals:</b>\n<code>{LINK_AI_SIGNALS}</code>\n\n"
-        f"⚠️ <b>Совет:</b> Кидай ссылки в шапку профиля TikTok. Все переходы и регистрации запишутся на тебя."
+        f"⚠️ <b>Совет:</b> Кидай ссылки в шапку профиля TikTok. Все переходы и регистрации запишутся на тебя. Больше трафика = больше бонусов!"
+    )
+    await message.answer(text)
+
+@dp.message(F.text == "👥 Пригласить трафера (5%)")
+async def partner_invite_trafficker(message: types.Message):
+    uid = message.from_user.id
+    b_info = await bot.get_me()
+    ref_link = f"https://t.me/{b_info.username}?start=ref_{uid}"
+    
+    text = (
+        f"👥 <b>Партнерская сеть (5% RevShare)</b>\n\n"
+        f"Приглашай других траферов в нашу команду и получай <b>5% от их заработка</b>!\n\n"
+        f"Твоя ссылка для приглашения траферов:\n"
+        f"<code>{ref_link}</code>\n\n"
+        f"<i>Как это работает?</i>\n"
+        f"1. Друг переходит по ссылке и становится трафером.\n"
+        f"2. Он льет трафик и зарабатывает.\n"
+        f"3. Ты получаешь 5% от его прибыли на свой баланс!"
     )
     await message.answer(text)
 
 @dp.message(F.text == "📊 Моя статистика")
 async def partner_stats(message: types.Message):
-    await message.answer("📊 <b>Твоя статистика:</b>\n\n👆 Переходы: <i>считаются</i>\n✅ Регистрации: <i>считаются</i>\n💰 Текущий баланс: <i>запроси у админа</i>")
+    uid = message.from_user.id
+    with get_db() as conn:
+        # Считаем, сколько траферов пригласил этот юзер
+        refs = conn.execute("SELECT COUNT(*) FROM partners WHERE referrer_id = ?", (uid,)).fetchone()[0]
+        
+    await message.answer(
+        f"📊 <b>Твоя статистика:</b>\n\n"
+        f"👆 Переходы: <i>считаются</i>\n"
+        f"✅ Регистрации: <i>считаются</i>\n"
+        f"👥 Приглашено траферов (5%): <b>{refs}</b>\n"
+        f"💰 Текущий баланс: <i>запроси у админа</i>\n\n"
+        f"<i>(Автоматическая статистика появится чуть позже. Пока для проверки пиши админу)</i>"
+    )
 
 # ============================================================
 # ОБРАТНАЯ СВЯЗЬ
@@ -237,7 +273,6 @@ async def process_support_msg(message: types.Message, state: FSMContext):
     uname = message.from_user.username or "no_username"
     
     try:
-        # Отправляем сообщение админу. ВАЖНО: добавляем ID трафера в сообщение!
         await bot.send_message(
             ADMIN_ID, 
             f"📩 <b>СООБЩЕНИЕ ОТ ТРАФЕРА</b>\n"
@@ -249,33 +284,19 @@ async def process_support_msg(message: types.Message, state: FSMContext):
     except Exception:
         await message.answer("❌ Ошибка отправки. Попробуйте позже.")
 
-# ОТВЕТ АДМИНА (Ловим любой ответ админа)
+import re
 @dp.message(F.from_user.id == int(ADMIN_ID), F.reply_to_message)
 async def admin_reply_handler(message: types.Message):
-    # Проверяем, что админ ответил на сообщение от трафера
     reply_text = message.reply_to_message.text
-    
     if reply_text and "СООБЩЕНИЕ ОТ ТРАФЕРА" in reply_text:
-        # Ищем ID трафера в тексте сообщения (ищем цифры после слова "От: ")
         match = re.search(r'От:\s*(\d+)', reply_text)
-        
         if match:
             traf_id = int(match.group(1))
             try:
-                # Отправляем ответ траферу
                 await bot.send_message(traf_id, f"👑 <b>Ответ от Админа:</b>\n\n{message.text}")
                 await message.answer(f"✅ Ответ успешно отправлен траферу <code>{traf_id}</code>!")
             except Exception as e:
                 await message.answer(f"❌ Не удалось отправить сообщение. Ошибка: {e}")
-        else:
-            await message.answer("❌ Не смог найти ID трафера в сообщении.")
-            
-    elif reply_text and "НОВЫЙ КРЕАТИВ" in reply_text:
-         match = re.search(r'От:\s*(\d+)', reply_text)
-         if match:
-            traf_id = int(match.group(1))
-            await bot.send_message(traf_id, f"👑 <b>Ответ от Админа по креативу:</b>\n\n{message.text}")
-            await message.answer(f"✅ Ответ отправлен траферу <code>{traf_id}</code>!")
 
 # ============================================================
 # ОТПРАВКА СВОЕГО КРЕАТИВА
@@ -391,10 +412,11 @@ async def process_payout(message: types.Message, state: FSMContext):
 async def cmd_stats(message: types.Message):
     if str(message.from_user.id) != str(ADMIN_ID): return
     with get_db() as conn:
-        partners = conn.execute("SELECT tg_id, username FROM partners").fetchall()
+        partners = conn.execute("SELECT tg_id, username, referrer_id FROM partners").fetchall()
     text = f"📈 <b>Всего траферов: {len(partners)}</b>\n\n"
     for p in partners:
-        text += f"👤 <code>{p[0]}</code> | @{p[1]}\n"
+        ref_info = f" (Пригласил: {p[2]})" if p[2] else ""
+        text += f"👤 <code>{p[0]}</code> | @{p[1]}{ref_info}\n"
     await message.answer(text)
 
 # ============================================================
@@ -403,7 +425,7 @@ async def cmd_stats(message: types.Message):
 async def main():
     await bot.delete_webhook(drop_pending_updates=True)
     await bot.set_chat_menu_button(menu_button=MenuButtonCommands(text="Меню"))
-    log.info("Mega Partner Bot starting polling...")
+    log.info("Partner Bot starting polling...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
