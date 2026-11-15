@@ -36,7 +36,6 @@ DB_PATH = os.path.join(BASE_DIR, "partners.db")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("partner_bot")
 
-# Добавили состояние для приема креативов
 class PartnerStates(StatesGroup):
     waiting_payout = State()
     waiting_creative_submission = State()
@@ -182,7 +181,6 @@ async def cmd_start(message: types.Message):
         conn.execute("INSERT OR IGNORE INTO partners (tg_id, username, added_at) VALUES (?, ?, ?)", 
                      (uid, uname, datetime.datetime.now().isoformat()))
 
-    # Добавлен текст про бонусы за просмотры
     await message.answer(
         "🚀 <b>Добро пожаловать в Партнерскую команду!</b>\n\n"
         "Здесь ты можешь взять ссылки, получить сценарии и забрать кэш.\n\n"
@@ -213,7 +211,7 @@ async def partner_stats(message: types.Message):
     await message.answer("📊 <b>Твоя статистика:</b>\n\n👆 Переходы: <i>считаются</i>\n✅ Регистрации: <i>считаются</i>\n💰 Текущий баланс: <i>запроси у админа</i>\n\n<i>(Автоматическая статистика появится чуть позже. Пока для проверки пиши админу)</i>")
 
 # ============================================================
-# ОТПРАВКА СВОЕГО КРЕАТИВА (НОВОЕ)
+# ОТПРАВКА СВОЕГО КРЕАТИВА
 # ============================================================
 @dp.message(F.text == "📤 Предложить креатив")
 async def suggest_creative(message: types.Message, state: FSMContext):
@@ -232,7 +230,6 @@ async def process_creative_submission(message: types.Message, state: FSMContext)
     uname = message.from_user.username or "no_username"
     
     try:
-        # Пересылаем креатив админу
         await bot.send_message(ADMIN_ID, f"📥 <b>НОВЫЙ КРЕАТИВ ОТ ТРАФЕРА!</b>\n👤 От: <code>{uid}</code> | @{uname}\n\n👇 Смотри ниже:")
         await message.copy_to(chat_id=ADMIN_ID)
         
